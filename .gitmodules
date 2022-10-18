@@ -1,0 +1,3 @@
+[submodule "lib/gym-wordle"]
+	path = lib/gym-wordle
+	url = https://github.com/zach-lawless/gym-wordle.git
