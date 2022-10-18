@@ -18,12 +18,12 @@ class WordleGame():
 
     def __init__(self):
         self.env = gym.make('Wordle-v0')
-        self.reset_game()
 
     def reset_game(self):
         self.env.reset()
         self.num_turns_left = 6
         self.word_representation = [-1, -1, -1, -1, -1]
+        self.guessed_words = set()
         print(f"Correct Word: {encodeToStr(self.env.hidden_word)}")
 
     def tokenize_word(self, guess, guess_result):
@@ -62,6 +62,9 @@ class WordleGame():
         """
         return self.encode_alphabet(self.env._get_obs()['alphabet']), self.word_representation, self.num_turns_left
 
+    def already_guessed_word(self, word):
+        return word in self.guessed_words
+
     def make_guess(self, word_num: int, debug_mode: bool = False) -> Tuple[List[int], int, int]:
         """
         Make a guess by word number. Updates the state internallly.
@@ -71,6 +74,7 @@ class WordleGame():
 
         :return: Boolean value of if we're done.
         """
+        self.guessed_words.add(word_num)
         encoded_word = list(WORDS[word_num])
         print(f"Guess: {encodeToStr(encoded_word)}")
         if debug_mode:
@@ -96,11 +100,14 @@ class WordleModel(torch.nn.Module):
 
         # Hidden Layers
         self.hidden_layer_stack = torch.nn.Sequential(
-            torch.nn.Linear(32, 32),
-            torch.nn.ReLU(),
-            torch.nn.Linear(32, 32),
-            torch.nn.ReLU(),
-            torch.nn.Linear(32, len(WORDS)),
+            torch.nn.Linear(32, 32*26),
+            # torch.nn.Dropout(),
+            torch.nn.LeakyReLU(),
+            # torch.nn.Dropout(),
+            #torch.nn.Linear(32*26, 32*26),
+            # torch.nn.LeakyReLU(),
+            # torch.nn.Dropout(),
+            torch.nn.Linear(32*26, len(WORDS)),
         )
 
         # Output Softmax Layer
@@ -145,8 +152,11 @@ def train_loop(model: WordleModel, epoch_num: int, loss_fn, optimizer):
         output = model(
             [alphabet_tensor, tokenization_tensor, turns_left_tensor])
 
-        # Get the word number with the highest probability.
-        word_num = torch.argmax(output).item()
+        # Get the word number with the highest probability that we haven't guessed already
+        word_num = torch.argmax(output)
+        while game.already_guessed_word(word_num):
+            output[word_num] = -1
+            word_num = torch.argmax(output)
 
         # Make the guess.
         done = game.make_guess(word_num)
@@ -168,6 +178,7 @@ def test_loop(model: WordleModel, epoch_num: int, loss_fn):
     game.reset_game()
     labels = [0 if i == game.env.hidden_word else 1 for i in range(len(WORDS))]
     losses = []
+    min_val_loss = 100000000000
     done = False
     while not done:
         alphabet, tokenization, turns_left = game.get_current_state()
@@ -185,6 +196,9 @@ def test_loop(model: WordleModel, epoch_num: int, loss_fn):
             # Get the word number with the highest probability.
             word_num = torch.argmax(output).item()
 
+            if game.already_guessed_word(word_num):
+                output[word_num] = -1000000
+
             # Make the guess.
             done = game.make_guess(word_num)
 
@@ -194,7 +208,10 @@ def test_loop(model: WordleModel, epoch_num: int, loss_fn):
             losses.append([epoch_num, loss.item()])
             wandb.log({"test_loss": loss.item(), "epoch": epoch_num})
 
-    return losses
+            if loss < min_val_loss:
+                min_val_loss = loss
+
+    return losses, min_val_loss
 
 
 def train_model(model, epochs):
@@ -203,8 +220,9 @@ def train_model(model, epochs):
 
     wandb.config = {
         "epochs": epochs,
-        "learning_rate": 0.01,
+        "learning_rate": 0.001,
         "weight_decay": 0.0001,
+        "early_stopping": 40,
     }
 
     # Define the loss function with Classification Cross-Entropy loss and an optimizer with Adam optimizer
@@ -212,12 +230,29 @@ def train_model(model, epochs):
     optimizer = Adam(model.parameters(
     ), lr=wandb.config['learning_rate'], weight_decay=wandb.config['weight_decay'])
 
+    # Early Stopping
+    best_loss = 100000000000
+    early_stopping = 0
+
     for i in range(epochs):
         # Reset the game for the new game.
+        model.train()
         train_losses.append(train_loop(model, i, loss_fn, optimizer))
 
         # Test Eval Step
-        test_losses.append(test_loop(model, i, loss_fn))
+        model.eval()
+        new_test_losses, min_test_loss = test_loop(model, i, loss_fn)
+
+        # Early Stopping
+        if min_test_loss < best_loss:
+            best_loss = min_test_loss
+            early_stopping = 0
+        else:
+            early_stopping += 1
+            if early_stopping > wandb.config['early_stopping']:
+                print("No Improvement. Stoppoing Training.")
+                break
+        test_losses.append(new_test_losses)
 
     train_losses = np.array(train_losses).reshape(-1, 2)
     test_losses = np.array(test_losses).reshape(-1, 2)
