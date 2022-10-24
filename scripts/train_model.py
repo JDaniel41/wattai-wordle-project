@@ -1,3 +1,4 @@
+from calendar import c
 import torch
 import gym
 import gym_wordle
@@ -111,7 +112,7 @@ class WordleModel(torch.nn.Module):
             torch.nn.Dropout(),
             torch.nn.LeakyReLU(),
             torch.nn.Dropout(),
-            #torch.nn.Linear(58*26, 58*26),
+            # torch.nn.Linear(58*26, 58*26),
             # torch.nn.LeakyReLU(),
             # torch.nn.Dropout(),
             torch.nn.Linear(57*26, len(WORDS)),
@@ -311,7 +312,7 @@ def train_model(model, epochs, learning_rate):
     # Early Stopping
     best_loss = 100000000000
     early_stopping = 0
-
+    best_model = None
     for i in range(epochs):
         # Reset the game for the new game.
         model.train()
@@ -325,6 +326,7 @@ def train_model(model, epochs, learning_rate):
         if min_test_loss < best_loss:
             best_loss = min_test_loss
             early_stopping = 0
+            best_model = model.state_dict()
         else:
             early_stopping += 1
             if early_stopping > wandb.config['early_stopping']:
@@ -335,17 +337,19 @@ def train_model(model, epochs, learning_rate):
     train_losses = np.array(train_losses).reshape(-1, 2)
     test_losses = np.array(test_losses).reshape(-1, 2)
 
-    return min_test_loss
+    return min_test_loss, best_model
 
 
 def objective(args):
-    with wandb.init(project="wordle-watt-project", entity="jdaniel41"):
+    with wandb.init(project="wordle-watt-project", entity="jdaniel41", config=args):
         model = WordleModel()
         wandb.watch(model)
-        min_test_loss = train_model(
+        min_test_loss, best_state_dict = train_model(
             model, args['epochs'], args['learning_rate'])
         print(min_test_loss)
-        return {'loss': min_test_loss, 'status': STATUS_OK}
+        return {'loss': min_test_loss, 'status': STATUS_OK, 'attachments': {
+            'model_state_dict': best_state_dict
+        }}
 
 
 if __name__ == '__main__':
@@ -353,10 +357,11 @@ if __name__ == '__main__':
         'epochs': 1000,
         'learning_rate': hp.uniform('learning_rate', 0.0001, 0.1),
     }
-
+    trials = Trials()
     best = fmin(fn=objective,
                 space=space,
                 algo=tpe.suggest,
-                max_evals=10)
+                max_evals=1,
+                trials=trials)
     results = space_eval(space, best)
     print(results)
