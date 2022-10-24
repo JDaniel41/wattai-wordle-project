@@ -9,6 +9,9 @@ from torch.optim import Adam, SGD
 from typing import Tuple, List
 import wandb
 
+import hyperopt
+from hyperopt import hp, fmin, tpe, space_eval, STATUS_OK, Trials
+
 
 class WordleGame():
     """
@@ -206,7 +209,6 @@ def train_loop(model: WordleModel, epoch_num: int, loss_fn, optimizer):
 def test_loop(model: WordleModel, epoch_num: int, loss_fn):
     game = WordleGame()
     game.reset_game()
-    labels = [0 if i == game.env.hidden_word else 1 for i in range(len(WORDS))]
     losses = []
     min_val_loss = 100000000000
     done = False
@@ -244,15 +246,15 @@ def test_loop(model: WordleModel, epoch_num: int, loss_fn):
             # Get the word number with the highest probability.
             word_num = torch.argmax(output).item()
 
-            weights = get_word_scores(
+            labels = get_word_scores(
                 output, game.env.hidden_word, guessed_words)
-            weights = torch.tensor(weights, dtype=torch.float)
+            labels = torch.tensor(labels, dtype=torch.float)
 
             # Make the guess.
             done = game.make_guess(word_num)
 
             # Get the loss for the step
-            loss = loss_fn(weights, torch.tensor(labels, dtype=torch.float))
+            loss = loss_fn(output, labels)
 
             losses.append([epoch_num, loss.item()])
             wandb.log({"test_loss": loss.item(), "epoch": epoch_num})
@@ -261,7 +263,7 @@ def test_loop(model: WordleModel, epoch_num: int, loss_fn):
                 min_val_loss = loss
 
             guessed_words.add(word_num)
-            print(f"Guessed Word Score: {weights[word_num]}")
+            print(f"Guessed Word Score: {labels[word_num]}")
             print(f"Guessed Word Model Score: {output[word_num]}")
 
     return losses, min_val_loss
@@ -291,14 +293,13 @@ def get_word_scores(model_out, correct_word, prev_guessed_words):
     return scores
 
 
-def train_model(model, epochs):
+def train_model(model, epochs, learning_rate):
     train_losses = []
     test_losses = []
 
     wandb.config = {
         "epochs": epochs,
-        "learning_rate": 0.001,
-        "weight_decay": 0.0001,
+        "learning_rate": learning_rate,
         "early_stopping": 40,
     }
 
@@ -334,11 +335,28 @@ def train_model(model, epochs):
     train_losses = np.array(train_losses).reshape(-1, 2)
     test_losses = np.array(test_losses).reshape(-1, 2)
 
-    return train_losses, test_losses
+    return min_test_loss
+
+
+def objective(args):
+    with wandb.init(project="wordle-watt-project", entity="jdaniel41"):
+        model = WordleModel()
+        wandb.watch(model)
+        min_test_loss = train_model(
+            model, args['epochs'], args['learning_rate'])
+        print(min_test_loss)
+        return {'loss': min_test_loss, 'status': STATUS_OK}
 
 
 if __name__ == '__main__':
-    wandb.init(project="wordle-watt-project", entity="jdaniel41")
-    model = WordleModel()
-    wandb.watch(model)
-    train_losses, test_losses = train_model(model, 1000)
+    space = {
+        'epochs': 1000,
+        'learning_rate': hp.uniform('learning_rate', 0.0001, 0.1),
+    }
+
+    best = fmin(fn=objective,
+                space=space,
+                algo=tpe.suggest,
+                max_evals=10)
+    results = space_eval(space, best)
+    print(results)
