@@ -5,7 +5,7 @@ from gym_wordle.exceptions import InvalidWordException
 import numpy as np
 from gym_wordle.envs.wordle_env import WORDS, encodeToStr, strToEncode
 from tqdm import tqdm
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 from typing import Tuple, List
 import wandb
 
@@ -94,20 +94,24 @@ class WordleModel(torch.nn.Module):
         super(WordleModel, self).__init__()
 
         # Input Layers
-        self.alphabet_state = torch.nn.Linear(26, 26)
+        self.valid_alphabet_letters = torch.nn.Linear(
+            26, 26)   # 0 for unknown, 1 in word
+        self.invalid_alphabet_letters = torch.nn.Linear(
+            26, 26)  # 0 for unknown, 1 for not in word
         self.current_word_state = torch.nn.Linear(5, 5)
         self.num_turns_left_state = torch.nn.Linear(1, 1)
 
         # Hidden Layers
+        # TODO: Change to 58 if we add back turns left.
         self.hidden_layer_stack = torch.nn.Sequential(
-            torch.nn.Linear(32, 32*26),
-            # torch.nn.Dropout(),
+            torch.nn.Linear(57, 57*26),
+            torch.nn.Dropout(),
             torch.nn.LeakyReLU(),
-            # torch.nn.Dropout(),
-            #torch.nn.Linear(32*26, 32*26),
+            torch.nn.Dropout(),
+            #torch.nn.Linear(58*26, 58*26),
             # torch.nn.LeakyReLU(),
             # torch.nn.Dropout(),
-            torch.nn.Linear(32*26, len(WORDS)),
+            torch.nn.Linear(57*26, len(WORDS)),
         )
 
         # Output Softmax Layer
@@ -115,12 +119,15 @@ class WordleModel(torch.nn.Module):
 
     def forward(self, x):
         # Input Layers
-        x_alphabet = self.alphabet_state(x[0])
-        x_current_word = self.current_word_state(x[1])
-        x_num_turns_left = self.num_turns_left_state(x[2])
+        x_valid_alphabet = self.valid_alphabet_letters(x[0])
+        x_invalid_alphabet = self.invalid_alphabet_letters(x[1])
+        x_current_word = self.current_word_state(x[2])
+        x_num_turns_left = self.num_turns_left_state(x[3])
 
         # Hidden Layers
-        x = torch.cat((x_alphabet, x_current_word, x_num_turns_left), dim=0)
+        # TODO: Add back the turns left layer
+        x = torch.cat((x_valid_alphabet, x_invalid_alphabet,
+                      x_current_word), dim=0)
         x = self.hidden_layer_stack(x)
 
         # Output Softmax Layer
@@ -138,37 +145,60 @@ def train_loop(model: WordleModel, epoch_num: int, loss_fn, optimizer):
     labels = [0 if i == game.env.hidden_word else 1 for i in range(len(WORDS))]
     losses = []
 
+    guessed_words = set()
     # Training Step
     while not done:
         # Get the current game state.
         alphabet, tokenization, turns_left = game.get_current_state()
 
+        valid_alphabet_letters = []
+        invalid_alphabet_letters = []
+
+        for letter in alphabet:
+            if letter == 1:
+                valid_alphabet_letters.append(1)
+                invalid_alphabet_letters.append(0)
+            elif letter == 0:
+                valid_alphabet_letters.append(0)
+                invalid_alphabet_letters.append(1)
+            else:
+                valid_alphabet_letters.append(0)
+                invalid_alphabet_letters.append(0)
+
         # Convert to tensors
-        alphabet_tensor = torch.tensor(alphabet, dtype=torch.float)
+        valid_alphabet_tensor = torch.tensor(
+            valid_alphabet_letters, dtype=torch.float32)
+        invalid_alphabet_tensor = torch.tensor(
+            invalid_alphabet_letters, dtype=torch.float32)
         tokenization_tensor = torch.tensor(tokenization, dtype=torch.float)
         turns_left_tensor = torch.tensor([turns_left], dtype=torch.float)
 
         # Get the model's prediction for the current game state.
         output = model(
-            [alphabet_tensor, tokenization_tensor, turns_left_tensor])
+            [valid_alphabet_tensor, invalid_alphabet_tensor, tokenization_tensor, turns_left_tensor])
 
         # Get the word number with the highest probability that we haven't guessed already
         word_num = torch.argmax(output)
-        while game.already_guessed_word(word_num):
-            output[word_num] = -1
-            word_num = torch.argmax(output)
+        weights = get_word_scores(output, game.env.hidden_word, guessed_words)
+        weights = torch.tensor(weights, dtype=torch.float32)
 
         # Make the guess.
         done = game.make_guess(word_num)
 
         # Get the loss for the step
-        loss = loss_fn(output, torch.tensor(labels, dtype=torch.float))
+        loss = loss_fn(output,
+                       weights)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         losses.append([epoch_num, loss.item()])
         wandb.log({"train_loss": loss.item(), "epoch": epoch_num})
+
+        print(f"Guessed Word Score: {weights[word_num]}")
+        print(f"Guessed Word Model Score: {output[word_num]}")
+
+        guessed_words.add(word_num.item())
 
     return losses
 
@@ -180,30 +210,49 @@ def test_loop(model: WordleModel, epoch_num: int, loss_fn):
     losses = []
     min_val_loss = 100000000000
     done = False
+    guessed_words = set()
     while not done:
         alphabet, tokenization, turns_left = game.get_current_state()
 
+        valid_alphabet_letters = []
+        invalid_alphabet_letters = []
+
+        for letter in alphabet:
+            if letter == 1:
+                valid_alphabet_letters.append(1)
+                invalid_alphabet_letters.append(0)
+            elif letter == 0:
+                valid_alphabet_letters.append(0)
+                invalid_alphabet_letters.append(1)
+            else:
+                valid_alphabet_letters.append(0)
+                invalid_alphabet_letters.append(0)
+
         # Convert to tensors
-        alphabet_tensor = torch.tensor(alphabet, dtype=torch.float)
+        valid_alphabet_tensor = torch.tensor(
+            valid_alphabet_letters, dtype=torch.float32)
+        invalid_alphabet_tensor = torch.tensor(
+            invalid_alphabet_letters, dtype=torch.float32)
         tokenization_tensor = torch.tensor(tokenization, dtype=torch.float)
         turns_left_tensor = torch.tensor([turns_left], dtype=torch.float)
 
         with torch.no_grad():
             # Get the model's prediction for the current game state.
             output = model(
-                [alphabet_tensor, tokenization_tensor, turns_left_tensor])
+                [valid_alphabet_tensor, invalid_alphabet_tensor, tokenization_tensor, turns_left_tensor])
 
             # Get the word number with the highest probability.
             word_num = torch.argmax(output).item()
 
-            if game.already_guessed_word(word_num):
-                output[word_num] = -1000000
+            weights = get_word_scores(
+                output, game.env.hidden_word, guessed_words)
+            weights = torch.tensor(weights, dtype=torch.float)
 
             # Make the guess.
             done = game.make_guess(word_num)
 
             # Get the loss for the step
-            loss = loss_fn(output, torch.tensor(labels, dtype=torch.float))
+            loss = loss_fn(weights, torch.tensor(labels, dtype=torch.float))
 
             losses.append([epoch_num, loss.item()])
             wandb.log({"test_loss": loss.item(), "epoch": epoch_num})
@@ -211,7 +260,35 @@ def test_loop(model: WordleModel, epoch_num: int, loss_fn):
             if loss < min_val_loss:
                 min_val_loss = loss
 
+            guessed_words.add(word_num)
+            print(f"Guessed Word Score: {weights[word_num]}")
+            print(f"Guessed Word Model Score: {output[word_num]}")
+
     return losses, min_val_loss
+
+
+def get_word_scores(model_out, correct_word, prev_guessed_words):
+    # Compare the information helpfulness.
+    # 0.2 points for a letter in the right spot, 0.1 points for a letter in the word but not in the right spot.
+    # 0 points for a letter not in the word.
+    # Each loss weight should be (1 - calculated_weight)
+    scores = []
+
+    print(prev_guessed_words)
+    for idx, _ in enumerate(model_out):
+        if idx in prev_guessed_words:
+            scores.append(0)
+            continue  # Don't guess a word we've already guessed.
+        new_weight = 0
+        encoding_of_guess = WORDS[idx]
+        for guess_letter, actual_letter in zip(encoding_of_guess, correct_word):
+            if guess_letter == actual_letter:
+                new_weight += 0.2
+            elif guess_letter in correct_word:
+                new_weight += 0.1
+        scores.append(new_weight)
+
+    return scores
 
 
 def train_model(model, epochs):
@@ -227,9 +304,9 @@ def train_model(model, epochs):
 
     # Define the loss function with Classification Cross-Entropy loss and an optimizer with Adam optimizer
     loss_fn = torch.nn.CrossEntropyLoss()
-    optimizer = Adam(model.parameters(
-    ), lr=wandb.config['learning_rate'], weight_decay=wandb.config['weight_decay'])
-
+    # optimizer = Adam(model.parameters(
+    # ), lr=wandb.config['learning_rate'], weight_decay=wandb.config['weight_decay'])
+    optimizer = SGD(model.parameters(), lr=wandb.config['learning_rate'])
     # Early Stopping
     best_loss = 100000000000
     early_stopping = 0
