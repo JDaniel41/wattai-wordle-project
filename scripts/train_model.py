@@ -1,7 +1,5 @@
 from calendar import c
 import torch
-import gym
-import gym_wordle
 from gym_wordle.exceptions import InvalidWordException
 import numpy as np
 from gym_wordle.envs.wordle_env import WORDS, encodeToStr, strToEncode
@@ -9,90 +7,18 @@ from tqdm import tqdm
 from torch.optim import Adam, SGD
 from typing import Tuple, List
 import wandb
+import pickle
+import os
 
 import hyperopt
 from hyperopt import hp, fmin, tpe, space_eval, STATUS_OK, Trials
 
+from wordle_game_handler import WordleGame
 
-class WordleGame():
-    """
-    A wrapper class for the game. We will use this to make guesses by integer and
-    it will make it easier to integrate the gym environment with our model.
-    """
 
-    def __init__(self):
-        self.env = gym.make('Wordle-v0')
 
-    def reset_game(self):
-        self.env.reset()
-        self.num_turns_left = 6
-        self.word_representation = [-1, -1, -1, -1, -1]
-        self.guessed_words = set()
-        print(f"Correct Word: {encodeToStr(self.env.hidden_word)}")
-
-    def tokenize_word(self, guess, guess_result):
-        """
-        Update the tokenization with the most recent guess and return the tokenization.
-        """
-        old_tokenization = self.word_representation
-        new_tokenization = []
-        for old_symbol, new_symbol, result in zip(old_tokenization, guess, guess_result):
-            if result == 2:
-                new_tokenization.append(new_symbol)
-            else:
-                new_tokenization.append(old_symbol)
-        self.word_representation = new_tokenization
-        return new_tokenization
-
-    def encode_alphabet(self, alphabet_state):
-        """
-        Change the encoding of the alphabet to look like
-
-        -1 = Not Guessed Yet
-        0 = Incorrect Guess. This is not in the word
-        1 = It does appear in the word somewher.
-        """
-        encoded_alphabet = []
-        for letter in alphabet_state:
-            if letter == -1 or letter == 0:
-                encoded_alphabet.append(letter)
-            else:
-                encoded_alphabet.append(1)
-        return encoded_alphabet
-
-    def get_current_state(self):
-        """
-        Return the current state of the game.
-        """
-        return self.encode_alphabet(self.env._get_obs()['alphabet']), self.word_representation, self.num_turns_left
-
-    def already_guessed_word(self, word):
-        return word in self.guessed_words
-
-    def make_guess(self, word_num: int, debug_mode: bool = False) -> Tuple[List[int], int, int]:
-        """
-        Make a guess by word number. Updates the state internallly.
-
-        :param word_num: The word number to guess.
-        :param debug_mode: Whether to print debug information.
-
-        :return: Boolean value of if we're done.
-        """
-        self.guessed_words.add(word_num)
-        encoded_word = list(WORDS[word_num])
-        print(f"Guess: {encodeToStr(encoded_word)}")
-        if debug_mode:
-            print(encodeToStr(encoded_word))
-        obs, _, done, _ = self.env.step(encoded_word)
-
-        self.tokenize_word(WORDS[word_num], obs['board']
-                           [6-self.num_turns_left])
-        self.num_turns_left -= 1
-        return done
 
 # Define the Model Here
-
-
 class WordleModel(torch.nn.Module):
     def __init__(self):
         super(WordleModel, self).__init__()
@@ -140,7 +66,7 @@ class WordleModel(torch.nn.Module):
         return x
 
 
-def train_loop(model: WordleModel, epoch_num: int, loss_fn, optimizer):
+def train_loop(model: WordleModel, epoch_num: int, loss_fn, optimizer, device):
     game = WordleGame()
     game.reset_game()
     # Play until the game ends.
@@ -171,27 +97,27 @@ def train_loop(model: WordleModel, epoch_num: int, loss_fn, optimizer):
 
         # Convert to tensors
         valid_alphabet_tensor = torch.tensor(
-            valid_alphabet_letters, dtype=torch.float32)
+            valid_alphabet_letters, dtype=torch.float32).to(device)
         invalid_alphabet_tensor = torch.tensor(
-            invalid_alphabet_letters, dtype=torch.float32)
-        tokenization_tensor = torch.tensor(tokenization, dtype=torch.float)
-        turns_left_tensor = torch.tensor([turns_left], dtype=torch.float)
+            invalid_alphabet_letters, dtype=torch.float32).to(device)
+        tokenization_tensor = torch.tensor(tokenization, dtype=torch.float).to(device)
+        turns_left_tensor = torch.tensor([turns_left], dtype=torch.float).to(device)
 
         # Get the model's prediction for the current game state.
         output = model(
-            [valid_alphabet_tensor, invalid_alphabet_tensor, tokenization_tensor, turns_left_tensor])
+            [valid_alphabet_tensor, invalid_alphabet_tensor, tokenization_tensor, turns_left_tensor]).to(device)
 
         # Get the word number with the highest probability that we haven't guessed already
-        word_num = torch.argmax(output)
+        word_num = torch.argmax(output).to(device)
         weights = get_word_scores(output, game.env.hidden_word, guessed_words)
-        weights = torch.tensor(weights, dtype=torch.float32)
+        weights = torch.tensor(weights, dtype=torch.float32).to(device)
 
         # Make the guess.
         done = game.make_guess(word_num)
 
         # Get the loss for the step
         loss = loss_fn(output,
-                       weights)
+                       weights).to(device)
 
         optimizer.zero_grad()
         loss.backward()
@@ -207,7 +133,7 @@ def train_loop(model: WordleModel, epoch_num: int, loss_fn, optimizer):
     return losses
 
 
-def test_loop(model: WordleModel, epoch_num: int, loss_fn):
+def test_loop(model: WordleModel, epoch_num: int, loss_fn, device):
     game = WordleGame()
     game.reset_game()
     losses = []
@@ -233,29 +159,29 @@ def test_loop(model: WordleModel, epoch_num: int, loss_fn):
 
         # Convert to tensors
         valid_alphabet_tensor = torch.tensor(
-            valid_alphabet_letters, dtype=torch.float32)
+            valid_alphabet_letters, dtype=torch.float32).to(device)
         invalid_alphabet_tensor = torch.tensor(
-            invalid_alphabet_letters, dtype=torch.float32)
-        tokenization_tensor = torch.tensor(tokenization, dtype=torch.float)
-        turns_left_tensor = torch.tensor([turns_left], dtype=torch.float)
+            invalid_alphabet_letters, dtype=torch.float32).to(device)
+        tokenization_tensor = torch.tensor(tokenization, dtype=torch.float).to(device)
+        turns_left_tensor = torch.tensor([turns_left], dtype=torch.float).to(device)
 
         with torch.no_grad():
             # Get the model's prediction for the current game state.
             output = model(
-                [valid_alphabet_tensor, invalid_alphabet_tensor, tokenization_tensor, turns_left_tensor])
+                [valid_alphabet_tensor, invalid_alphabet_tensor, tokenization_tensor, turns_left_tensor]).to(device)
 
             # Get the word number with the highest probability.
-            word_num = torch.argmax(output).item()
+            word_num = torch.argmax(output).to(device).item()
 
             labels = get_word_scores(
                 output, game.env.hidden_word, guessed_words)
-            labels = torch.tensor(labels, dtype=torch.float)
+            labels = torch.tensor(labels, dtype=torch.float).to(device)
 
             # Make the guess.
             done = game.make_guess(word_num)
 
             # Get the loss for the step
-            loss = loss_fn(output, labels)
+            loss = loss_fn(output, labels).to(device)
 
             losses.append([epoch_num, loss.item()])
             wandb.log({"test_loss": loss.item(), "epoch": epoch_num})
@@ -313,14 +239,18 @@ def train_model(model, epochs, learning_rate):
     best_loss = 100000000000
     early_stopping = 0
     best_model = None
+
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    print(f"Using {device}")
+    model.to(device)
     for i in range(epochs):
         # Reset the game for the new game.
         model.train()
-        train_losses.append(train_loop(model, i, loss_fn, optimizer))
+        train_losses.append(train_loop(model, i, loss_fn, optimizer, device))
 
         # Test Eval Step
         model.eval()
-        new_test_losses, min_test_loss = test_loop(model, i, loss_fn)
+        new_test_losses, min_test_loss = test_loop(model, i, loss_fn, device)
 
         # Early Stopping
         if min_test_loss < best_loss:
@@ -334,8 +264,10 @@ def train_model(model, epochs, learning_rate):
                 break
         test_losses.append(new_test_losses)
 
-    train_losses = np.array(train_losses).reshape(-1, 2)
-    test_losses = np.array(test_losses).reshape(-1, 2)
+    # train_losses = np.array(train_losses).reshape(-1, 2)
+    # test_losses = np.array(test_losses).reshape(-1, 2)
+
+    wandb.log({"min_test_loss": min_test_loss})
 
     return min_test_loss, best_model
 
@@ -343,13 +275,12 @@ def train_model(model, epochs, learning_rate):
 def objective(args):
     with wandb.init(project="wordle-watt-project", entity="jdaniel41", config=args):
         model = WordleModel()
-        wandb.watch(model)
+        wandb.watch(model, log_freq=10, log='all')
         min_test_loss, best_state_dict = train_model(
             model, args['epochs'], args['learning_rate'])
         print(min_test_loss)
-        return {'loss': min_test_loss, 'status': STATUS_OK, 'attachments': {
-            'model_state_dict': best_state_dict
-        }}
+        torch.cuda.empty_cache()
+        return {'loss': min_test_loss, 'status': STATUS_OK, 'model_state_dict': best_state_dict}
 
 
 if __name__ == '__main__':
@@ -358,10 +289,23 @@ if __name__ == '__main__':
         'learning_rate': hp.uniform('learning_rate', 0.0001, 0.1),
     }
     trials = Trials()
+
+    if os.path.exists('wordle_trials.trials'):
+        trials = pickle.load(open("wordle_trials.trials", "rb"))
+
     best = fmin(fn=objective,
                 space=space,
                 algo=tpe.suggest,
-                max_evals=1,
+                max_evals=200,
                 trials=trials)
     results = space_eval(space, best)
-    print(results)
+
+    valid_trial_list = [trial for trial in trials.results if STATUS_OK == trial['status']]
+    losses = [float(trial['loss']) for trial in valid_trial_list]
+
+    min_loss_index = np.argmin(losses)
+
+    best_model = valid_trial_list[min_loss_index]['model_state_dict']
+    torch.save(best_model, 'best_model.pth')
+
+    pickle.dump(trials, open('wordle_trials.trials', "wb"))
