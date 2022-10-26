@@ -75,6 +75,8 @@ def train_loop(model: WordleModel, epoch_num: int, loss_fn, optimizer, device):
     labels = [0 if i == game.env.hidden_word else 1 for i in range(len(WORDS))]
     losses = []
 
+    num_guessed_words = 0
+
     guessed_words = set()
     # Training Step
     while not done:
@@ -130,6 +132,7 @@ def train_loop(model: WordleModel, epoch_num: int, loss_fn, optimizer, device):
 
         guessed_words.add(word_num.item())
 
+    wandb.log({"num_guessed_words_train": len(guessed_words) })
     return losses
 
 
@@ -193,6 +196,7 @@ def test_loop(model: WordleModel, epoch_num: int, loss_fn, device):
             print(f"Guessed Word Score: {labels[word_num]}")
             print(f"Guessed Word Model Score: {output[word_num]}")
 
+    wandb.log({"num_guessed_words_test": len(guessed_words) })
     return losses, min_val_loss
 
 
