@@ -12,17 +12,20 @@ class WordleGame():
 
     def __init__(self):
         self.env = gym.make('Wordle-v0')
+        self.word_list = WORDS
 
     def reset_game(self):
         self.env.reset()
         self.num_turns_left = 6
         self.word_representation = [-1, -1, -1, -1, -1]
         self.guessed_words = set()
-        print(f"Correct Word: {encodeToStr(self.env.hidden_word)}")
+        print(f"\nCorrect Word: {encodeToStr(self.env.hidden_word)}")
 
     def tokenize_word(self, guess, guess_result):
         """
         Update the tokenization with the most recent guess and return the tokenization.
+
+        Each number will be the index of the letter in the word.
         """
         old_tokenization = self.word_representation
         new_tokenization = []
@@ -31,7 +34,6 @@ class WordleGame():
                 new_tokenization.append(new_symbol)
             else:
                 new_tokenization.append(old_symbol)
-        self.word_representation = new_tokenization
         return new_tokenization
 
     def encode_alphabet(self, alphabet_state):
@@ -49,6 +51,9 @@ class WordleGame():
             else:
                 encoded_alphabet.append(1)
         return encoded_alphabet
+
+    def get_current_alphabet(self):
+        return self.encode_alphabet(self.env._get_obs()['alphabet'])
 
     def get_current_state(self):
         """
@@ -73,9 +78,9 @@ class WordleGame():
         print(f"Guess: {encodeToStr(encoded_word)}")
         if debug_mode:
             print(encodeToStr(encoded_word))
-        obs, _, done, _ = self.env.step(encoded_word)
+        obs, reward, done, _ = self.env.step(encoded_word)
 
-        self.tokenize_word(WORDS[word_num], obs['board']
-                           [6-self.num_turns_left])
+        self.word_representation = self.tokenize_word(WORDS[word_num], obs['board']
+                                                      [6-self.num_turns_left])
         self.num_turns_left -= 1
-        return done
+        return done, reward == 1
