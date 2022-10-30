@@ -106,26 +106,39 @@ def play_game_with_model(model, game: WordleGame, device, guessed_words, loss_fn
 
 def train_loop(model: WordleModel, epoch_num: int, loss_fn, optimizer, device):
     game = WordleGame()
-    game.reset_game()
-    # Play until the game ends.
-    done = False
-    losses = []
-
-    guessed_words = set()
+    total_loss = 0
     model.train()
-    # Training Step
-    while not done:
-        loss, done, _, _, _ = play_game_with_model(
-            model, game, device, guessed_words, loss_fn)
+    num_wins = 0
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        losses.append([epoch_num, loss.item()])
-        wandb.log({"train_loss": loss.item(), "epoch": epoch_num})
+    for i in range(wandb.config['games_per_epoch']):
+        print(f"Train Game {i}")
+        guessed_words = set()
+        done = False
+        game.reset_game()
+        guess_num = 0
+        while not done:
+            loss, done, _, _, is_win = play_game_with_model(
+                model, game, device, guessed_words, loss_fn)
 
-    wandb.log({"num_guessed_words_train": len(guessed_words)})
-    return losses
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            wandb.log({"train_loss": loss.item(), "epoch": epoch_num, "guess_num": guess_num, "game_num": i})
+
+            total_loss += loss.item()
+
+            if is_win:
+                print("WON A GAME!")
+                num_wins += 1
+        wandb.log({"num_guessed_words_train": len(guessed_words)})
+    
+    wandb.log({
+        "avg_train_loss": total_loss / wandb.config['games_per_epoch'],
+        "epoch": epoch_num
+    })
+    wandb.log({"num_train_wins": num_wins})
+
+    return total_loss / wandb.config['games_per_epoch'], num_wins
 
 
 def test_loop(model: WordleModel, epoch_num: int, loss_fn, device):
@@ -136,7 +149,7 @@ def test_loop(model: WordleModel, epoch_num: int, loss_fn, device):
     model.eval()
 
     # Let's play some games! We will report the average test loss to WANDB.
-    for i in range(wandb.config['num_test_games']):
+    for i in range(wandb.config['games_per_epoch']):
         print(f"Test Game {i}")
         guessed_words = set()
         done = False
@@ -155,24 +168,33 @@ def test_loop(model: WordleModel, epoch_num: int, loss_fn, device):
                 })
 
                 if is_win:
+                    print("WON A GAME!")
                     num_wins += 1
 
                 total_test_loss += loss.item()
+            guess_num += 1
 
         game.reset_game()
         wandb.log({"num_guessed_words_test": len(guessed_words)})
 
-    wandb.log({"num_wins": num_wins})
-    wandb.log({"avg_test_loss": total_test_loss /
-              wandb.config['num_test_games']})
+    wandb.log({
+        "avg_test_loss": total_test_loss / wandb.config['games_per_epoch'],
+        "epoch": epoch_num
+    })
 
-    return total_test_loss / wandb.config['num_test_games']
+    wandb.log({'num_test_wins': num_wins})
+
+    return total_test_loss / wandb.config['games_per_epoch'], num_wins
 
 
 def train_model():
-    run = wandb.init(project="wordle-watt-project", entity="jdaniel41")
+    run = wandb.init(project="wordle-watt-project", entity="jdaniel41", )
     model = WordleModel(
         len(WORDS), wandb.config['hidden_multiplier'])
+
+    print(f"CONFIG: {wandb.config}")
+    
+    wandb.watch(model, log_freq=1000, log='all')
 
     # Define the loss function with Classification Cross-Entropy loss and an optimizer with Adam optimizer
     loss_fn = torch.nn.CrossEntropyLoss()
@@ -183,6 +205,8 @@ def train_model():
     best_loss = 100000000000
     early_stopping = 0
     best_model = None
+    total_test_wins = 0
+    total_train_wins = 0
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(f"Using {device}")
@@ -190,16 +214,24 @@ def train_model():
     for i in range(wandb.config['epochs']):
         # Reset the game for the new game.
         model.train()
-        train_loop(model, i, loss_fn, optimizer, device)
+        avg_train_loss, num_train_wins = train_loop(model, i, loss_fn, optimizer, device)
 
         # Test Eval Step
         model.eval()
-        new_test_losses, min_test_loss = test_loop(model, i, loss_fn, device)
+        avg_test_loss, num_test_wins = test_loop(model, i, loss_fn, device)
+
+        total_train_wins += num_train_wins
+        total_test_wins += num_test_wins
+
+        wandb.log({
+            "total_train_wins": total_train_wins,
+            "total_test_wins": total_test_wins,
+            "epoch": i
+        })
 
         # Early Stopping
-        if min_test_loss < best_loss:
-            wandb.run.summary["min_test_loss"] = min_test_loss
-            best_loss = min_test_loss
+        if avg_test_loss < best_loss:
+            best_loss = avg_test_loss
             early_stopping = 0
             best_model = model.state_dict()
         else:
@@ -207,26 +239,16 @@ def train_model():
             if early_stopping > wandb.config['early_stopping']:
                 print("No Improvement. Stoppoing Training.")
                 break
+    
 
+    wandb.run.summary["min_test_loss"] = best_loss
+    torch.save(model.state_dict(), 'best_model.pth')
+    artifact = wandb.Artifact(name='best_model.pth', type='model')
+    wandb.run.log_artifact(artifact)
+    
+    torch.cuda.empty_cache()
     return
 
 
 if __name__ == '__main__':
-    sweep_configuration = {
-        'method': 'bayes',
-        'name': 'sweep',
-        'metric': {'goal': 'minimize', 'name': 'test_loss'},
-        'parameters':
-        {
-            'num_test_games': {'values': [20]},
-            'learning_rate': {'distribution': 'normal', 'mu': 0.001, 'sigma': 0.0001},
-            'early_stopping': {'values': [20]},
-            'epochs': {'values': [200]},
-            'hidden_multiplier': {'distribution': 'int_uniform', 'min': 1, 'max': 100},
-        }
-    }
-
-    sweep_id = wandb.sweep(sweep=sweep_configuration,
-                           project='wordle-watt-project')
-
-    wandb.agent(sweep_id, function=train_model, count=4)
+    wandb.agent('jdaniel41/wordle-watt-project/3hpb1wlv', function=train_model, count=100)
