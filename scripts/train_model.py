@@ -110,7 +110,7 @@ def train_loop(model: WordleModel, epoch_num: int, loss_fn, optimizer, device):
     model.train()
     num_wins = 0
 
-    for i in range(wandb.config['games_per_epoch']):
+    for i in range(wandb.config['train_games_per_epoch']):
         print(f"Train Game {i}")
         guessed_words = set()
         done = False
@@ -134,12 +134,12 @@ def train_loop(model: WordleModel, epoch_num: int, loss_fn, optimizer, device):
         wandb.log({"num_guessed_words_train": len(guessed_words)})
 
     wandb.log({
-        "avg_train_loss": total_loss / wandb.config['games_per_epoch'],
+        "avg_train_loss": total_loss / wandb.config['train_games_per_epoch'],
         "epoch": epoch_num
     })
     wandb.log({"num_train_wins": num_wins})
 
-    return total_loss / wandb.config['games_per_epoch'], num_wins
+    return total_loss / wandb.config['train_games_per_epoch'], num_wins
 
 
 def test_loop(model: WordleModel, epoch_num: int, loss_fn, device):
@@ -150,7 +150,7 @@ def test_loop(model: WordleModel, epoch_num: int, loss_fn, device):
     model.eval()
 
     # Let's play some games! We will report the average test loss to WANDB.
-    for i in range(wandb.config['games_per_epoch']):
+    for i in range(wandb.config['test_games_per_epoch']):
         print(f"Test Game {i}")
         guessed_words = set()
         done = False
@@ -179,7 +179,7 @@ def test_loop(model: WordleModel, epoch_num: int, loss_fn, device):
         wandb.log({"num_guessed_words_test": len(guessed_words)})
 
     wandb.log({
-        "avg_test_loss": total_test_loss / wandb.config['games_per_epoch'],
+        "avg_test_loss": total_test_loss / wandb.config['test_games_per_epoch'],
         "epoch": epoch_num
     })
 
@@ -188,7 +188,7 @@ def test_loop(model: WordleModel, epoch_num: int, loss_fn, device):
         'epoch': epoch_num
     })
 
-    return total_test_loss / wandb.config['games_per_epoch'], num_wins
+    return total_test_loss / wandb.config['test_games_per_epoch'], num_wins
 
 
 def train_model():
@@ -247,7 +247,7 @@ def train_model():
                 break
 
     wandb.run.summary["min_test_loss"] = best_loss
-    torch.save(model.state_dict(), 'best_model.pth')
+    torch.save(best_model.state_dict(), 'best_model.pth')
     artifact = wandb.Artifact(name='best_model.pth', type='model')
     wandb.run.log_artifact(artifact)
 
@@ -256,5 +256,5 @@ def train_model():
 
 
 if __name__ == '__main__':
-    wandb.agent('jdaniel41/wordle-watt-project/bl63e71h',
+    wandb.agent('jdaniel41/wordle-watt-project/zf6jdgps',
                 function=train_model, count=100)
