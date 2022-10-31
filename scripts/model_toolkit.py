@@ -18,11 +18,6 @@ class WordleModel(torch.nn.Module):
         self.hidden_layer_stack = torch.nn.Sequential(
             torch.nn.Linear(57, 57*hidden_multiplier),
             torch.nn.Dropout(),
-            torch.nn.LeakyReLU(),
-            torch.nn.Dropout(),
-            # torch.nn.Linear(58*26, 58*hidden_multiplier),
-            # torch.nn.LeakyReLU(),
-            # torch.nn.Dropout(),
             torch.nn.Linear(57*hidden_multiplier, num_words),
         )
 
