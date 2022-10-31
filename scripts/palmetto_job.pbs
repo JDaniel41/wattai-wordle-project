@@ -1,0 +1,16 @@
+#PBS -N train_wordle_model
+#PBS -l select=1:ncpus=20:mem=46gb:ngpus=1:gpu_model=v100,walltime=48:00:00
+#PBS -m abe
+#PBS -M jmdanie@clemson.edu
+#PBS -o job_stdout.txt
+#PBS -e job_stdout.txt
+source ~/.bashrc
+cd /home/jmdanie/wattai-wordle-project/scripts
+conda activate watt_wordle_env
+python train_model.py &
+python train_model.py &
+python train_model.py &
+python train_model.py &
+python train_model.py &
+python train_model.py &
+wait
