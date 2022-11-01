@@ -256,5 +256,5 @@ def train_model():
 
 
 if __name__ == '__main__':
-    wandb.agent('jdaniel41/wordle-watt-project/zf6jdgps',
+    wandb.agent('jdaniel41/wordle-watt-project/6sbydzol',
                 function=train_model, count=100)
