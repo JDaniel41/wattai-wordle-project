@@ -215,7 +215,9 @@ def train_model():
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(f"Using {device}")
     model.to(device)
-    for i in range(wandb.config['epochs']):
+
+    i = 0
+    while True:
         # Reset the game for the new game.
         model.train()
         avg_train_loss, num_train_wins = train_loop(
@@ -246,6 +248,8 @@ def train_model():
                 print("No Improvement. Stoppoing Training.")
                 break
 
+        i += 1
+
     wandb.run.summary["min_test_loss"] = best_loss
     torch.save(best_model.state_dict(), 'best_model.pth')
     artifact = wandb.Artifact(name='best_model.pth', type='model')
@@ -256,5 +260,5 @@ def train_model():
 
 
 if __name__ == '__main__':
-    wandb.agent('jdaniel41/wordle-watt-project/6sbydzol',
-                function=train_model, count=100)
+    wandb.agent('jdaniel41/wordle-watt-project/3oq6by2o',
+                function=train_model, count=1)
