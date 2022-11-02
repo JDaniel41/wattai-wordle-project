@@ -1,9 +1,11 @@
 import torch
+from gym_wordle.envs.wordle_env import WORDS
 
 
 class WordleModel(torch.nn.Module):
     def __init__(self, num_words: int, hidden_multiplier: int = 26):
         super(WordleModel, self).__init__()
+        self.num_words = num_words
 
         # Input Layers
         self.valid_alphabet_letters = torch.nn.Linear(
@@ -39,5 +41,16 @@ class WordleModel(torch.nn.Module):
 
         # Output Softmax Layer
         x = self.output(x)
+
+        # Post-Procesing. Eliminate words where it cannot possibly be that.
+        for word_index in range(self.num_words):
+            word = WORDS[word_index]
+            for letter_index in range(len(word)):
+                letter = word[letter_index]
+                # If this word has a letter that is not in the invalid alphabet
+                # then, we should mark it as a 0.
+                if x_invalid_alphabet[letter] == 0:
+                    x[word_index] = 0
+                    break
 
         return x
