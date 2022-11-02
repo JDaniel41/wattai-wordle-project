@@ -249,6 +249,7 @@ def train_model():
                 break
 
         i += 1
+        break
 
     wandb.run.summary["min_test_loss"] = best_loss
     torch.save(best_model.state_dict(), 'best_model.pth')
