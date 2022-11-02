@@ -252,7 +252,7 @@ def train_model():
         break
 
     wandb.run.summary["min_test_loss"] = best_loss
-    torch.save(best_model.state_dict(), 'best_model.pth')
+    torch.save(best_model, 'best_model.pth')
     artifact = wandb.Artifact(name='best_model.pth', type='model')
     wandb.run.log_artifact(artifact)
 
