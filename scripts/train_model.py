@@ -249,7 +249,6 @@ def train_model():
                 break
 
         i += 1
-        break
 
     wandb.run.summary["min_test_loss"] = best_loss
     torch.save(best_model, 'best_model.pth')
@@ -262,4 +261,4 @@ def train_model():
 
 if __name__ == '__main__':
     wandb.agent('jdaniel41/wordle-watt-project/3oq6by2o',
-                function=train_model, count=1)
+                function=train_model, count=100)
