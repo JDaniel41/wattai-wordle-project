@@ -44,6 +44,8 @@ class WordleModel(torch.nn.Module):
         # Output Softmax Layer
         x = self.output(x)
 
+        x_before_process = x.clone()
+
         # Post-Procesing. Eliminate words where it cannot possibly be that.
         for word_index in range(self.num_words):
             # At this point, the word should be an encoding.
@@ -51,11 +53,11 @@ class WordleModel(torch.nn.Module):
             for idx, letter in enumerate(word):
                 # If this letter is in the invalid_alphabet, mark it 0.
                 if x_invalid_alphabet[letter] == 1:
-                    x[word_index] = 0
+                    x_before_process[word_index] = 0
 
                 # If we know the letter for this position, filter out all words
                 # without that position
                 if current_word_as_list[idx] != -1 and current_word_as_list[idx] != letter:
-                    x[word_index] = 0
+                    x_before_process[word_index] = 0
 
-        return x
+        return x_before_process
