@@ -27,6 +27,8 @@ class WordleModel(torch.nn.Module):
         self.output = torch.nn.Softmax(dim=0)
 
     def forward(self, x):
+        current_word_as_list = x[2].tolist()
+
         # Input Layers
         x_valid_alphabet = self.valid_alphabet_letters(x[0])
         x_invalid_alphabet = self.invalid_alphabet_letters(x[1])
@@ -44,13 +46,16 @@ class WordleModel(torch.nn.Module):
 
         # Post-Procesing. Eliminate words where it cannot possibly be that.
         for word_index in range(self.num_words):
+            # At this point, the word should be an encoding.
             word = WORDS[word_index]
-            for letter_index in range(len(word)):
-                letter = word[letter_index]
-                # If this word has a letter that is not in the invalid alphabet
-                # then, we should mark it as a 0.
-                if x_invalid_alphabet[letter] == 0:
+            for idx, letter in enumerate(word):
+                # If this letter is in the invalid_alphabet, mark it 0.
+                if x_invalid_alphabet[letter] == 1:
                     x[word_index] = 0
-                    break
+
+                # If we know the letter for this position, filter out all words
+                # without that position
+                if current_word_as_list[idx] != -1 and current_word_as_list[idx] != letter:
+                    x[word_index] = 0
 
         return x
